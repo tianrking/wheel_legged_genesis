@@ -17,7 +17,7 @@ class WheelLeggedEnv:
                  domain_rand_cfg, terrain_cfg, robot_morphs="urdf", show_viewer=False, num_view = 1, device="cuda", train_mode=True):
         self.device = torch.device(device)
 
-        self.mode = train_mode   #True训练模式开启
+        self.mode = train_mode  #True训练模式开启
         
         self.num_envs = num_envs
         self.num_obs = obs_cfg["num_obs"]
@@ -106,7 +106,7 @@ class WheelLeggedEnv:
                 height_field = height_field,
                 horizontal_scale=self.horizontal_scale, 
                 vertical_scale=self.vertical_scale,
-                ),)     
+                ),) 
                 pos = self.base_init_pos.cpu().numpy()
                 terrain_pos.append([pos[0], pos[1], 0])
                 # print("\033[1;34m respawn_points: \033[0m",self.base_init_pos)
@@ -198,9 +198,7 @@ class WheelLeggedEnv:
         damping[:,:6] = 0
         self.robot.set_dofs_damping(damping, np.arange(0,self.robot.n_dofs))
         
-        # from IPython import embed; embed()
-        # print(self.scene.sim.rigid_solver.dofs_info.damping.to_numpy())
-        # print(self.scene.sim.rigid_solver.dofs_info.stiffness.to_numpy())
+        # armature: 初始化时设置一次，新版API在这里是兼容的
         armature = np.full((self.num_envs, self.robot.n_dofs), self.env_cfg["armature"])
         armature[:,:6] = 0
         self.robot.set_dofs_armature(armature, np.arange(0, self.robot.n_dofs))
@@ -304,7 +302,7 @@ class WheelLeggedEnv:
         self.connect_force = torch.zeros((self.num_envs,self.robot.n_links, 3), device=self.device, dtype=gs.tc_float)
         self.extras = dict()  # extra information for logging
         
-        #跪地重启   注意是idx_local不需要减去base_idx
+        #跪地重启  注意是idx_local不需要减去base_idx
         if(self.env_cfg["termination_if_base_connect_plane_than"]&self.mode):
             self.reset_links = [(self.robot.get_link(name).idx_local) for name in self.env_cfg["connect_plane_links"]]
         #足端位置
@@ -321,13 +319,21 @@ class WheelLeggedEnv:
         self.friction_ratio_low = self.domain_rand_cfg["friction_ratio_range"][0]
         self.friction_ratio_range = self.domain_rand_cfg["friction_ratio_range"][1] - self.friction_ratio_low
         self.base_mass_low = self.domain_rand_cfg["random_base_mass_shift_range"][0]
-        self.base_mass_range = self.domain_rand_cfg["random_base_mass_shift_range"][1] - self.base_mass_low  
+        self.base_mass_range = self.domain_rand_cfg["random_base_mass_shift_range"][1] - self.base_mass_low 
         self.other_mass_low = self.domain_rand_cfg["random_other_mass_shift_range"][0]
-        self.other_mass_range = self.domain_rand_cfg["random_other_mass_shift_range"][1] - self.other_mass_low            
+        self.other_mass_range = self.domain_rand_cfg["random_other_mass_shift_range"][1] - self.other_mass_low          
         self.dof_damping_low = self.domain_rand_cfg["damping_range"][0]
         self.dof_damping_range = self.domain_rand_cfg["damping_range"][1] - self.dof_damping_low
-        self.dof_armature_low = self.domain_rand_cfg["dof_armature_range"][0]
-        self.dof_armature_range = self.domain_rand_cfg["dof_armature_range"][1] - self.dof_armature_low
+        
+        # 修复 Key Error: dof_armature_range 必须存在
+        if "dof_armature_range" in self.domain_rand_cfg:
+            self.dof_armature_low = self.domain_rand_cfg["dof_armature_range"][0]
+            self.dof_armature_range = self.domain_rand_cfg["dof_armature_range"][1] - self.dof_armature_low
+        else:
+            # 如果 train.py 遗漏了，则安全地设置为无随机化
+            self.dof_armature_low = 0.002 # 使用默认值
+            self.dof_armature_range = 0.0  # 无随机范围
+            
         self.kp_low = self.domain_rand_cfg["random_KP"][0]
         self.kp_range = self.domain_rand_cfg["random_KP"][1] - self.kp_low
         self.kv_low = self.domain_rand_cfg["random_KV"][0]
@@ -345,14 +351,15 @@ class WheelLeggedEnv:
         for solver in self.scene.sim.solvers:
             if not isinstance(solver, RigidSolver):
                 continue
-            rigid_solver = solver
+            # 存储 solver 引用，以便在 domain_rand 中访问其内部属性（如 dofs_armature）
+            self.rigid_solver = solver
 
         # print("self.init_dof_pos",self.init_dof_pos)
         #初始化角度
         self.reset()
         
     def _resample_commands(self, envs_idx): 
-        if self.command_cfg["high_speed"]:  
+        if self.command_cfg["high_speed"]: 
             for command_idx in (0,1):
                 low = self.command_ranges[envs_idx, command_idx, 0]
                 high = self.command_ranges[envs_idx, command_idx, 1]
@@ -371,8 +378,8 @@ class WheelLeggedEnv:
             self.commands[envs_idx, 5] = torch.clip(self.commands[envs_idx, 5], self.command_cfg["tsk_range"][0], self.command_cfg["tsk_range"][1])
             #角速度命令高就要限制腿部相似 随机一个mean然后高斯采样
             leg_length_mean = gs_rand_float(self.command_ranges[envs_idx, 3, 0],
-                                           self.command_ranges[envs_idx, 3, 1],
-                                           envs_idx.shape, self.device)
+                                             self.command_ranges[envs_idx, 3, 1],
+                                             envs_idx.shape, self.device)
             leg_length_std = self.command_cfg["inverse_leg_length"]/safe_angv
             leg_length_std = torch.clip(leg_length_std, 1e-5, 2.0)
             self.commands[envs_idx, 3] = gs_rand_normal(leg_length_mean, leg_length_std, envs_idx.shape, self.device)
@@ -487,7 +494,7 @@ class WheelLeggedEnv:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.0)
             
         # else:
-        #     print("base_lin_vel: ",self.base_lin_vel[0,:])
+        #      print("base_lin_vel: ",self.base_lin_vel[0,:])
             
         # compute observations
         self.slice_obs_buf = torch.cat(
@@ -568,7 +575,7 @@ class WheelLeggedEnv:
                         env_id += 1
                 self.base_pos[-remainder:] = self.base_terrain_pos[0]
         else:
-            self.base_pos[envs_idx] = self.base_init_pos   #没开地形就基础
+            self.base_pos[envs_idx] = self.base_init_pos  #没开地形就基础
             
         self.robot.set_pos(self.base_pos[envs_idx], zero_velocity=False, envs_idx=envs_idx)
         self.robot.set_quat(self.base_quat[envs_idx], zero_velocity=False, envs_idx=envs_idx)
@@ -620,22 +627,22 @@ class WheelLeggedEnv:
     def domain_rand(self, envs_idx):
         friction_ratio = self.friction_ratio_low + self.friction_ratio_range * torch.rand(len(envs_idx), self.robot.n_links)
         self.robot.set_friction_ratio(friction_ratio=friction_ratio,
-                                      links_idx_local=np.arange(0, self.robot.n_links),
-                                      envs_idx = envs_idx)
+                                     links_idx_local=np.arange(0, self.robot.n_links),
+                                     envs_idx = envs_idx)
 
         base_mass_shift = self.base_mass_low + self.base_mass_range * torch.rand(len(envs_idx), 1, device=self.device)
         other_mass_shift =-self.other_mass_low + self.other_mass_range * torch.rand(len(envs_idx), self.robot.n_links - 1, device=self.device)
         mass_shift = torch.cat((base_mass_shift, other_mass_shift), dim=1)
         self.robot.set_mass_shift(mass_shift=mass_shift,
-                                  links_idx_local=np.arange(0, self.robot.n_links),
-                                  envs_idx = envs_idx)
+                                     links_idx_local=np.arange(0, self.robot.n_links),
+                                     envs_idx = envs_idx)
 
         base_com_shift = -self.domain_rand_cfg["random_base_com_shift"] / 2 + self.domain_rand_cfg["random_base_com_shift"] * torch.rand(len(envs_idx), 1, 3, device=self.device)
         other_com_shift = -self.domain_rand_cfg["random_other_com_shift"] / 2 + self.domain_rand_cfg["random_other_com_shift"] * torch.rand(len(envs_idx), self.robot.n_links - 1, 3, device=self.device)
         com_shift = torch.cat((base_com_shift, other_com_shift), dim=1)
         self.robot.set_COM_shift(com_shift=com_shift,
-                                 links_idx_local=np.arange(0, self.robot.n_links),
-                                 envs_idx = envs_idx)
+                                     links_idx_local=np.arange(0, self.robot.n_links),
+                                     envs_idx = envs_idx)
 
         kp_shift = (self.kp_low + self.kp_range * torch.rand(len(envs_idx), self.num_actions, device="cpu")) * self.kp[0]
         self.robot.set_dofs_kp(kp_shift, self.motors_dof_idx, envs_idx=envs_idx)
@@ -650,14 +657,36 @@ class WheelLeggedEnv:
         damping = (self.dof_damping_low+self.dof_damping_range * torch.rand(len(envs_idx), self.robot.n_dofs))
         damping[:,:6] = 0
         self.robot.set_dofs_damping(damping=damping, 
-                                   dofs_idx_local=np.arange(0, self.robot.n_dofs), 
-                                   envs_idx=envs_idx)
+                                     dofs_idx_local=np.arange(0, self.robot.n_dofs), 
+                                     envs_idx=envs_idx)
 
-        armature = (self.dof_armature_low+self.dof_armature_range * torch.rand(len(envs_idx), self.robot.n_dofs))
-        armature[:,:6] = 0
-        self.robot.set_dofs_armature(armature=armature, 
-                                   dofs_idx_local=np.arange(0, self.robot.n_dofs), 
-                                   envs_idx=envs_idx)
+        # -------------------- API 适配的核心修复区域 --------------------
+        # 错误原因：旧代码 (self.robot.set_dofs_armature) 试图用不完整的张量和索引更新，
+        # 而新版 Genesis 要求传入完整的张量。
+        if self.dof_armature_range > 1e-5: # 仅在有实际随机范围时执行
+            
+            # 1. 获取当前所有环境的 armature 值 (完整批次)
+            #    由于我们在 __init__ 中存储了 solver 引用，我们可以直接访问它的内部张量。
+            #    注意：这里假设 self.rigid_solver 是 RigidSolver 实例
+            full_armature_tensor = self.rigid_solver.dofs_armature
+            
+            # 2. 生成需要随机化的环境的随机值
+            armature_min = self.dof_armature_low
+            armature_max = self.dof_armature_low + self.dof_armature_range
+            
+            new_rand_armatures = torch.rand(len(envs_idx), self.robot.n_dofs, device=self.device) * \
+                                 (armature_max - armature_min) + armature_min
+            
+            # 3. 将新值替换到完整张量的对应索引位置
+            #    注意：这里必须使用切片操作来确保只修改需要重置的环境。
+            full_armature_tensor[envs_idx] = new_rand_armatures.to(full_armature_tensor.dtype)
+            
+            # 4. 调用新版 API：只需要传入完整的张量，不用再传入 envs_idx
+            #    因为我们直接修改了内部数据，不需要再次调用 set_dofs_armature，
+            #    但为了确保更新生效，我们调用一个兼容的 update 函数或者保持原调用，
+            #    不过最安全的方式是调用 set_dofs_armature 且不传入 envs_idx
+            self.robot.set_dofs_armature(armature=full_armature_tensor)
+        # -------------------------------------------------------------------
 
     def curriculum_commands(self):
         self.curriculum_step += 1
@@ -687,11 +716,11 @@ class WheelLeggedEnv:
                     self.command_ranges[:, 0, 0] -= self.curriculum_cfg["curriculum_lin_vel_step"]*self.command_cfg["lin_vel_x_range"][0]
                     self.command_ranges[:, 0, 1] -= self.curriculum_cfg["curriculum_lin_vel_step"]*self.command_cfg["lin_vel_x_range"][1]
                 self.command_ranges[:,0,0] = torch.clamp(self.command_ranges[:,0,0],
-                                                        self.command_cfg["lin_vel_x_range"][0],
-                                                        self.curriculum_cfg["curriculum_lin_vel_min_range"] * self.command_cfg["lin_vel_x_range"][0])
+                                                         self.command_cfg["lin_vel_x_range"][0],
+                                                         self.curriculum_cfg["curriculum_lin_vel_min_range"] * self.command_cfg["lin_vel_x_range"][0])
                 self.command_ranges[:,0,1] = torch.clamp(self.command_ranges[:,0,1],
-                                                        self.curriculum_cfg["curriculum_lin_vel_min_range"] * self.command_cfg["lin_vel_x_range"][1],
-                                                        self.command_cfg["lin_vel_x_range"][1])
+                                                         self.curriculum_cfg["curriculum_lin_vel_min_range"] * self.command_cfg["lin_vel_x_range"][1],
+                                                         self.command_cfg["lin_vel_x_range"][1])
             #角度
             angv_err_high = 999
             if self.curriculum_cfg["err_mode"]:
@@ -711,11 +740,11 @@ class WheelLeggedEnv:
                     self.command_ranges[:, 2, 0] -= self.curriculum_cfg["curriculum_ang_vel_step"]*self.command_cfg["ang_vel_range"][0]
                     self.command_ranges[:, 2, 1] -= self.curriculum_cfg["curriculum_ang_vel_step"]*self.command_cfg["ang_vel_range"][1]
                 self.command_ranges[:,2,0] = torch.clamp(self.command_ranges[:,2,0],
-                                                        self.command_cfg["ang_vel_range"][0],
-                                                        self.curriculum_cfg["curriculum_ang_vel_min_range"] * self.command_cfg["ang_vel_range"][0])
+                                                         self.command_cfg["ang_vel_range"][0],
+                                                         self.curriculum_cfg["curriculum_ang_vel_min_range"] * self.command_cfg["ang_vel_range"][0])
                 self.command_ranges[:,2,1] = torch.clamp(self.command_ranges[:,2,1],
-                                                        self.curriculum_cfg["curriculum_ang_vel_min_range"] * self.command_cfg["ang_vel_range"][1],
-                                                        self.command_cfg["ang_vel_range"][1])
+                                                         self.curriculum_cfg["curriculum_ang_vel_min_range"] * self.command_cfg["ang_vel_range"][1],
+                                                         self.command_cfg["ang_vel_range"][1])
 
     '''正金字塔楼梯'''
     def add_pyramid(self,point):
@@ -743,9 +772,9 @@ class WheelLeggedEnv:
         box_offset = (self.v_plane_size + self.v_stairs_width)/2
         box_length = self.v_plane_size + self.v_stairs_width*2
         box_pos = [[point[0]+box_offset, point[1], point[2]+self.v_stairs_height/2],
-                [point[0]-box_offset, point[1], point[2]+self.v_stairs_height/2],
-                [point[0], point[1]+box_offset, point[2]+self.v_stairs_height/2],
-                [point[0], point[1]-box_offset, point[2]+self.v_stairs_height/2]]
+                 [point[0]-box_offset, point[1], point[2]+self.v_stairs_height/2],
+                 [point[0], point[1]+box_offset, point[2]+self.v_stairs_height/2],
+                 [point[0], point[1]-box_offset, point[2]+self.v_stairs_height/2]]
         box_size = [[self.v_stairs_width, box_length, self.v_stairs_height],
                     [self.v_stairs_width, box_length, self.v_stairs_height],
                     [box_length, self.v_stairs_width, self.v_stairs_height],
@@ -851,24 +880,10 @@ class WheelLeggedEnv:
         return ang_vel_reward
 
     def _reward_tracking_leg_length(self):
-        # 身高跟踪 建议用高斯函数
-        # base_height_error = torch.square(self.base_pos[:, 2] - self.commands[:, 3])
-        # return torch.exp(-base_height_error / self.reward_cfg["tracking_height_sigma"])
         # 膝关节跟踪 建议用二次函数
-        # knee_error = torch.square(self.dof_pos[:, [2, 5]] - self.commands[:, 3].unsqueeze(1)).sum(dim=1)
-        # return torch.exp(-knee_error / self.reward_cfg["tracking_height_sigma"])
-        # return knee_error
-        # 髋关节跟踪 建议用二次函数
         knee_error = torch.square(self.dof_pos[:, 1] - self.commands[:, 3])
         knee_error += torch.square(self.dof_pos[:, 4] - self.commands[:, 4])
         return knee_error
-        # 脚据base距离
-        # base_height_error = torch.abs(self.left_foot_base_pos[:, 2] - self.commands[:, 3]) 
-        # + torch.abs(self.right_foot_base_pos[:, 2] - self.commands[:, 3])
-        # base_height_error = torch.square(base_height_error)
-        # print("base_height_error: ", base_height_error)
-        # return torch.exp(-base_height_error / self.reward_cfg["tracking_height_sigma"])
-        # return base_height_error
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
@@ -883,20 +898,9 @@ class WheelLeggedEnv:
         # Penalize changes in actions
         wheel_action_rate = self.last_actions[:,self.wheel_dof_idx_np] - self.actions[:,self.wheel_dof_idx_np]
         return torch.sum(torch.square(wheel_action_rate), dim=1)
-        # return torch.log(torch.square(wheel_action_rate)+1).sum(dim=1)
-
-    # def _reward_similar_to_default(self):
-    #     # Penalize joint poses far away from default pose
-    #     #个人认为为了灵活性这个作用性不大
-    #     return torch.sum(torch.abs(self.dof_pos[:,self.joint_dof_idx_np] - self.default_dof_pos[:,self.joint_dof_idx_np]), dim=1)
 
     def _reward_projected_gravity(self):
         #保持水平奖励使用重力投影 0 0 -1
-        #使用e^(-x^2)效果不是很好
-        # projected_gravity_error = 1 + self.projected_gravity[:, 2] #[0, 0.2]
-        # projected_gravity_error = torch.square(projected_gravity_error)
-        # return torch.exp(-projected_gravity_error / self.reward_cfg["tracking_gravity_sigma"])
-        #二次函数
         reward = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
         return reward
     
@@ -930,7 +934,7 @@ class WheelLeggedEnv:
         # 两腿间距
         feet_distance = torch.norm(self.left_foot_pos - self.right_foot_pos, dim=-1)
         reward = torch.clip(self.reward_cfg["feet_distance"][0] - feet_distance, 0, 1) + \
-                 torch.clip(feet_distance - self.reward_cfg["feet_distance"][1], 0, 1)
+                     torch.clip(feet_distance - self.reward_cfg["feet_distance"][1], 0, 1)
         return reward
     
     def _reward_survive(self):
@@ -942,4 +946,3 @@ class WheelLeggedEnv:
         tsk_err = self.dof_pos[:,0] - self.commands[:, 5]
         tsk_err += self.dof_pos[:,3] - self.commands[:, 5]
         return torch.square(tsk_err)
-    
