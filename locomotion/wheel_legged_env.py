@@ -600,7 +600,8 @@ class WheelLeggedEnv:
         if self.mode:
             self._resample_commands(envs_idx)
             # if self.survive_ratio > 0.7:
-        self.domain_rand(envs_idx)
+            self.domain_rand(envs_idx) # <-- 移到这里
+        # self.domain_rand(envs_idx)
         self.episode_lengths[envs_idx] = 0.0
         # 重置误差
         self.lin_vel_error[envs_idx] = 0
@@ -668,7 +669,8 @@ class WheelLeggedEnv:
             # 1. 获取当前所有环境的 armature 值 (完整批次)
             #    由于我们在 __init__ 中存储了 solver 引用，我们可以直接访问它的内部张量。
             #    注意：这里假设 self.rigid_solver 是 RigidSolver 实例
-            full_armature_tensor = self.rigid_solver.dofs_armature
+            # full_armature_tensor = self.rigid_solver.dofs_armature
+            full_armature_tensor = self.rigid_solver.get_dofs_armature() # <-- 修改这一行
             
             # 2. 生成需要随机化的环境的随机值
             armature_min = self.dof_armature_low
